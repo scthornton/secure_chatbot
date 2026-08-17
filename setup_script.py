@@ -23,8 +23,8 @@ def run_command(command, description):
 def check_python_version():
     """Check if Python version is compatible"""
     print("🐍 Checking Python version...")
-    if sys.version_info < (3, 9):
-        print(f"❌ Python 3.9+ required, but you have {sys.version}")
+    if sys.version_info < (3, 10):
+        print(f"❌ Python 3.10+ required, but you have {sys.version}")
         return False
     print(f"✅ Python {sys.version.split()[0]} is compatible")
     return True
@@ -45,17 +45,14 @@ def get_activation_command():
     else:  # Unix/Linux/macOS
         return "source venv/bin/activate"
 
-def setup_palo_alto_repository():
-    """Configure pip for Palo Alto Networks repository"""
-    commands = [
-        'python -m pip config set global.extra-index-url "https://art.code.pan.run/artifactory/api/pypi/aisec-api-pypi/simple"',
-        'python -m pip install --upgrade pip'
-    ]
-    
-    for command in commands:
-        if not run_command(command, f"Running: {command}"):
-            return False
-    return True
+def upgrade_pip():
+    """Upgrade pip before installing requirements
+
+    Everything this project needs is on public PyPI, including the AI Runtime
+    Security SDK (published as pan-aisecurity). No extra index URL is required.
+    """
+    return run_command(f"{sys.executable} -m pip install --upgrade pip",
+                       "Upgrading pip")
 
 def install_requirements():
     """Install Python requirements"""
@@ -173,7 +170,7 @@ try:
         import aisecurity
         print("✅ aisecurity imported successfully")
     except ImportError:
-        print("⚠️  aisecurity not available - you may need to configure Palo Alto repository access")
+        print("⚠️  aisecurity not available - install it with: pip install pan-aisecurity")
     
     import tkinter
     print("✅ tkinter imported successfully")
@@ -207,8 +204,8 @@ def print_next_steps():
    - Get Azure OpenAI credentials from Azure Portal
    
 3. Run the chatbots:
-   python chatbot_sdk.py      # For Python SDK version
-   python chatbot_api.py      # For Direct API version
+   python secure_chatbot_python.py   # For Python SDK version
+   python secure_chatbot_api.py      # For Direct API version
 
 📚 Documentation:
    - README.md for detailed setup instructions
@@ -240,7 +237,7 @@ def main():
     
     print(f"\n⚠️  Please activate your virtual environment and run this script again:")
     print(f"   {get_activation_command()}")
-    print(f"   python setup.py")
+    print(f"   python setup_script.py")
     
     # Check if we're in a virtual environment
     if sys.prefix == sys.base_prefix:
@@ -249,9 +246,9 @@ def main():
     
     print("\n🔧 Continuing setup in virtual environment...")
     
-    # Setup Palo Alto repository
-    if not setup_palo_alto_repository():
-        print("⚠️  Palo Alto repository setup failed. You may need to install aisecurity manually.")
+    # Upgrade pip
+    if not upgrade_pip():
+        print("⚠️  pip upgrade failed, continuing with the existing pip.")
     
     # Install requirements
     if not install_requirements():

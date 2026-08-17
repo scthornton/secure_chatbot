@@ -1,17 +1,32 @@
 # Secure Chatbot with Palo Alto Networks AI Runtime Security
 # Requirements file for both Python SDK and Direct API versions
+#
+# Install with: pip install -r requirements.txt
+# Everything here comes from public PyPI. No extra index URL is needed.
+# Requires Python 3.10+ (pan-aisecurity minimum).
 
 # Core Python packages
 requests>=2.31.0
 urllib3>=2.0.0
 
+# HTTP client. Both chatbots do "import httpx" at module scope and build an
+# httpx.Client(http2=True), so httpx and its http2 extra are hard requirements,
+# not optional. They were previously missing here, which meant a clean install
+# failed with ModuleNotFoundError on the very first run.
+httpx[http2]>=0.25.0
+
 # Azure OpenAI integration
-openai>=1.35.0
+# Capped below 3.0 on purpose: openai 3.x switched its http_client parameter
+# from httpx.Client to httpx2.Client, which breaks the AzureOpenAI(...) calls
+# in both chatbots. Lift this cap only together with a port to httpx2.
+openai>=1.35.0,<3
 
 # Palo Alto Networks AI Runtime Security SDK
-# Note: This requires special configuration for Palo Alto Networks repository
-# Follow installation guide: https://docs.paloaltonetworks.com/ai-runtime-security/activation-and-onboarding/ai-runtime-security-api-intercept-overview/airs-apis-python-sdk
-aisecurity>=1.0.0
+# Published on public PyPI as "pan-aisecurity". The importable module is
+# "aisecurity", which is why this was previously mispinned as a bare
+# "aisecurity" package that does not exist on PyPI.
+# Requires Python 3.10+.
+pan-aisecurity>=0.4.0
 
 # Environment management
 python-dotenv>=1.0.0

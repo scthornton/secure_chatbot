@@ -15,6 +15,15 @@ import uuid      # For generating unique transaction IDs
 import httpx     # Special HTTP client required by Azure OpenAI
 from openai import AzureOpenAI  # The Azure OpenAI client library
 
+# Load credentials from a .env file if one is present, so the documented
+# "cp .env.example .env" setup actually reaches os.getenv() below. Real
+# environment variables always win over .env values.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv is optional; export the variables yourself instead
+
 
 def scan_prompt_with_paloalto_api(prompt, api_key, ai_profile_name, base_url="https://service.api.aisecurity.paloaltonetworks.com"):
     """

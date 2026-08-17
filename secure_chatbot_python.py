@@ -16,6 +16,15 @@ import asyncio
 import time
 from openai import AzureOpenAI
 
+# Load credentials from a .env file if one is present, so the documented
+# "cp .env.example .env" setup actually reaches os.getenv() below. Real
+# environment variables always win over .env values.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv is optional; export the variables yourself instead
+
 # Import the real Palo Alto Networks AI Security SDK
 try:
     import aisecurity

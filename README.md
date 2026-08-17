@@ -1,9 +1,9 @@
 # 🛡️ Secure Chatbot with Palo Alto Networks AI Runtime Security
 
-[![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://python.org)
+[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Security](https://img.shields.io/badge/Security-Palo%20Alto%20Networks-orange.svg)](https://www.paloaltonetworks.com/)
-[![AI Runtime Security](https://img.shields.io/badge/AI%20Runtime%20Security-API%20Intercept-red.svg)](https://pan.dev/ai-runtime-security/)
+[![AI Runtime Security](https://img.shields.io/badge/AI%20Runtime%20Security-API%20Intercept-red.svg)](https://pan.dev/prisma-airs/api/airuntimesecurity/airuntimesecurityapi)
 
 > **Secure AI chatbot implementations demonstrating real-time threat protection using Palo Alto Networks AI Runtime Security**
 
@@ -31,22 +31,22 @@ Two complete chatbot implementations showcasing how to integrate AI Runtime Secu
 ## 📁 Project Structure
 
 ```
-secure-chatbot/
-├── secure_chatbot_python.py          # Python SDK implementation
-├── secure_chatbot_api.py             # Direct API implementation
-├── README.md               # This file
-├── requirements.txt        # Python dependencies
-├── .env.example            # Environment variables template
-└── docs/
-    ├── setup-guide.md     # Detailed setup instructions
-    └── api-reference.md   # API usage examples
+secure_chatbot/
+├── secure_chatbot_python.py   # Python SDK implementation
+├── secure_chatbot_api.py      # Direct API implementation
+├── setup_script.py            # Optional guided setup helper
+├── README.md                  # This file
+├── tips.md                    # Usage tips
+├── requirements.txt           # Python dependencies
+├── requirements_dev.txt       # Development dependencies
+└── .env.example               # Environment variables template
 ```
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 
-- **Python 3.9+** installed on your system
+- **Python 3.10+** installed on your system (required by `pan-aisecurity`)
 - **Palo Alto Networks AI Runtime Security account** with API access
 - **Valid API key and security profile** configured
 
@@ -55,7 +55,7 @@ secure-chatbot/
 ```bash
 # Clone the repository
 git clone https://github.com/scthornton/secure_chatbot.git
-cd secure-chatbot
+cd secure_chatbot
 
 # Create virtual environment
 python -m venv venv
@@ -78,32 +78,28 @@ nano .env
 Add your credentials to `.env`:
 ```env
 PANW_AI_SEC_API_KEY=your_api_key_here
-PANW_AI_SEC_PROFILE=your_profile_name
-PANW_AI_SEC_ENDPOINT=https://service.api.aisecurity.paloaltonetworks.com
+PANW_AI_SEC_PROFILE_NAME=your_profile_name
+
+# Azure OpenAI. AZURE_PROJECT is the resource NAME, not the full URL.
+AZURE_PROJECT=your_azure_openai_resource_name
+AZURE_KEY=your_azure_openai_api_key
+AZURE_DEPLOY=your_deployment_name
 ```
 
-### 3. Install AI Runtime Security SDK
+### 3. Run the Applications
 
-For the SDK version, install the official package:
-
-```bash
-# Configure pip for Palo Alto Networks repository
-python -m pip config set global.extra-index-url "https://art.code.pan.run/artifactory/api/pypi/aisec-api-pypi/simple"
-
-# Install the aisecurity package
-pip install aisecurity
-```
-
-### 4. Run the Applications
+`pip install -r requirements.txt` in step 1 already installed the AI Runtime
+Security SDK from public PyPI, where it is published as `pan-aisecurity`
+(the module you import is named `aisecurity`). No extra index URL is needed.
 
 #### Python SDK Version (Recommended)
 ```bash
-python chatbot_sdk.py
+python secure_chatbot_python.py
 ```
 
 #### Direct API Version
 ```bash
-python chatbot_api.py
+python secure_chatbot_api.py
 ```
 
 ## 🔧 Configuration Options
@@ -276,23 +272,21 @@ We welcome contributions! Here's how to get started:
 
 ```bash
 # Install development dependencies
-pip install -r requirements-dev.txt
-
-# Run tests
-python -m pytest tests/
+pip install -r requirements_dev.txt
 
 # Format code
-black chatbot_*.py
+black secure_chatbot_*.py
 
 # Lint code
-flake8 chatbot_*.py
+flake8 secure_chatbot_*.py
 ```
 
 ## 📚 Documentation
 
 - 📖 [Official AI Runtime Security Documentation](https://docs.paloaltonetworks.com/ai-runtime-security)
-- 🔧 [API Reference](https://pan.dev/ai-runtime-security/api/ai-runtime-security-api-intercept/)
-- 🐍 [Python SDK Documentation](https://pan.dev/ai-runtime-security/api/pythonsdk/)
+- 🔧 [Runtime Scan API Reference](https://pan.dev/prisma-airs/api/airuntimesecurity/airuntimesecurityapi)
+- 🔧 [Management API Reference](https://pan.dev/prisma-airs/api/airuntimesecurity/prismaairsmanagementapi)
+- 🐍 [Python SDK on PyPI](https://pypi.org/project/pan-aisecurity/)
 - 🚀 [Getting Started Guide](https://docs.paloaltonetworks.com/ai-runtime-security/activation-and-onboarding)
 
 ## ❓ Troubleshooting
@@ -320,7 +314,15 @@ Solution: Check network connectivity and firewall settings
 **🔥 SDK Import Error**
 ```
 Error: No module named 'aisecurity'
-Solution: Install the SDK using the official repository
+Solution: pip install pan-aisecurity
+          (the PyPI package is pan-aisecurity, the module is aisecurity)
+```
+
+**🔥 Credentials Look Set But The App Says They Are Missing**
+```
+Cause:    A variable in .env is spelled differently from what the code reads
+Solution: Use the exact names in .env.example, in particular
+          PANW_AI_SEC_PROFILE_NAME, AZURE_PROJECT, AZURE_KEY, AZURE_DEPLOY
 ```
 
 ### Getting Help
