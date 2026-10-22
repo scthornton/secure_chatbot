@@ -12,7 +12,7 @@ import requests  # For making HTTP requests to web APIs
 import json      # For converting Python data to/from JSON format
 import os        # For reading environment variables from system
 import uuid      # For generating unique transaction IDs
-import httpx     # Special HTTP client required by Azure OpenAI
+import getpass   # For a stable app_user value in scan metadata
 from openai import AzureOpenAI  # The Azure OpenAI client library
 
 # Load credentials from a .env file if one is present, so the documented
@@ -24,13 +24,35 @@ try:
 except ImportError:
     pass  # python-dotenv is optional; export the variables yourself instead
 
+# Prisma AIRS regional endpoint. US is the default; set PANW_AI_SEC_ENDPOINT to
+# the EU (service-de), India (service-in), or Singapore (service-sg) host when
+# your API key was issued in that region. Keys are region-specific.
+PANW_AI_SEC_ENDPOINT = os.getenv(
+    "PANW_AI_SEC_ENDPOINT", "https://service.api.aisecurity.paloaltonetworks.com"
+).rstrip("/")
 
-def scan_prompt_with_paloalto_api(prompt, api_key, ai_profile_name, base_url="https://service.api.aisecurity.paloaltonetworks.com"):
+# Azure OpenAI data-plane API version. 2024-10-21 is a GA version; override
+# with AZURE_API_VERSION if your deployment needs a different one.
+AZURE_API_VERSION = os.getenv("AZURE_API_VERSION", "2024-10-21")
+
+# Metadata attached to every scan. app_name and app_user show up in the Strata
+# Cloud Manager session and violation views.
+APP_NAME = os.getenv("PANW_AI_SEC_APP_NAME", "secure-chatbot-azure")
+APP_USER = os.getenv("PANW_AI_SEC_APP_USER", getpass.getuser())
+
+
+def scan_prompt_with_paloalto_api(prompt, api_key, ai_profile_name, base_url=None, response=None, ai_model=None):
     """
     SECURITY SCANNER FUNCTION
 
-    Sends a user prompt to Palo Alto Networks AI Security API to check for threats.
-    The API analyzes the text and returns a security assessment.
+    Sends a user prompt (and optionally the model's response) to the Palo Alto
+    Networks AI Security API to check for threats. The API analyzes the text
+    and returns a security assessment.
+
+    Called twice per turn: once with the prompt alone (before the LLM sees it)
+    and once with prompt + response (before the user sees the reply). Prisma
+    AIRS evaluates a response only when one is sent; it does not predict what
+    the model will say.
 
     THREAT DETECTION CAPABILITIES:
     - DLP (Data Loss Prevention): Detects sensitive data like SSNs, credit cards
@@ -42,7 +64,10 @@ def scan_prompt_with_paloalto_api(prompt, api_key, ai_profile_name, base_url="ht
         prompt (str): The user's message that needs security scanning
         api_key (str): Your Palo Alto Networks API authentication key
         ai_profile_name (str): Name of your configured AI Security Profile
-        base_url (str): The Palo Alto Networks API endpoint URL
+        base_url (str): The Palo Alto Networks API endpoint URL (defaults to
+            PANW_AI_SEC_ENDPOINT, which defaults to the US region)
+        response (str): Optional LLM output to scan together with the prompt
+        ai_model (str): Optional model name recorded in scan metadata
 
     RETURNS:
         dict: Security scan results with category and action recommendations
@@ -50,6 +75,7 @@ def scan_prompt_with_paloalto_api(prompt, api_key, ai_profile_name, base_url="ht
     """
 
     # Build the complete API endpoint URL
+    base_url = (base_url or PANW_AI_SEC_ENDPOINT).rstrip("/")
     url = f"{base_url}/v1/scan/sync/request"
 
     # Generate a unique tracking ID for this security scan
@@ -66,32 +92,38 @@ def scan_prompt_with_paloalto_api(prompt, api_key, ai_profile_name, base_url="ht
     }
 
     # Prepare the request payload with scan parameters
+    content = {"prompt": prompt}           # The actual user message
+    if response is not None:
+        content["response"] = response     # The LLM reply, on the second scan of a turn
+
     payload = {
         "tr_id": transaction_id,           # Unique identifier for tracking
         "ai_profile": {                    # Security profile configuration
             "profile_name": ai_profile_name
         },
-        "contents": [                      # Content to be scanned
-            {
-                "prompt": prompt           # The actual user message
-            }
-        ]
+        "metadata": {                      # Attribution shown in SCM sessions and violations
+            "app_name": APP_NAME,
+            "app_user": APP_USER,
+            "ai_model": ai_model or "azure-openai"
+        },
+        "contents": [content]              # Content to be scanned
     }
 
     # Display what we're about to scan
-    print(f"\n🔍 Scanning prompt for security threats...")
+    what = "prompt + response" if response is not None else "prompt"
+    print(f"\n🔍 Scanning {what} for security threats...")
     print(f"   Content: '{prompt[:50]}...' ({len(prompt)} characters)")
 
     try:
-        # Send POST request to Palo Alto Networks API
-        response = requests.post(url, headers=headers,
-                                 data=json.dumps(payload))
+        # Send POST request to Palo Alto Networks API. The timeout keeps the
+        # chatbot from hanging forever if the network path is broken.
+        api_response = requests.post(url, headers=headers, json=payload, timeout=30)
 
         # Check if the HTTP request was successful (status code 200-299)
-        response.raise_for_status()
+        api_response.raise_for_status()
 
         # Parse the JSON response from the API
-        scan_result = response.json()
+        scan_result = api_response.json()
 
         # Display formatted security scan results
         print("\n📋 SECURITY SCAN RESULTS:")
@@ -132,10 +164,14 @@ def scan_prompt_with_paloalto_api(prompt, api_key, ai_profile_name, base_url="ht
 
         threats_found = False
 
-        # Debug: Show the actual API response structure
+        # Debug: Show the actual API response structure.
+        # prompt_detected covers the user's message; response_detected is only
+        # populated when a response was included in the request. AIRS does not
+        # predict the model's output, it inspects what was actually sent.
         print(f"🔍 DEBUG - Raw API Response:")
         print(f"   Category: {scan_result.get('category')}")
         print(f"   Action: {scan_result.get('action')}")
+        print(f"   Scan ID: {scan_result.get('scan_id')}  Report ID: {scan_result.get('report_id')}")
         print(f"   Prompt detected: {scan_result.get('prompt_detected', {})}")
         print(
             f"   Response detected: {scan_result.get('response_detected', {})}")
@@ -207,7 +243,7 @@ def scan_prompt_with_paloalto_api(prompt, api_key, ai_profile_name, base_url="ht
     except json.JSONDecodeError as json_err:
         # Server response was not valid JSON
         print(f"❌ JSON Decode Error: {json_err}")
-        print(f"   Raw Response: {response.text}")
+        print(f"   Raw Response: {api_response.text}")
         print("   The server returned malformed data")
         return None
 
@@ -289,13 +325,15 @@ def main():
     azure_endpoint = f"https://{azure_project}.openai.azure.com/"
 
     try:
-        # Initialize the Azure OpenAI client with configuration
+        # Initialize the Azure OpenAI client with configuration. TLS
+        # verification is left ON (an earlier version disabled it, which
+        # silently exposed the Azure key to any on-path interceptor). If your
+        # network uses a TLS-inspecting proxy, point SSL_CERT_FILE at your
+        # corporate CA bundle instead of turning verification off.
         azure_client = AzureOpenAI(
             azure_endpoint=azure_endpoint,
             api_key=azure_key,
-            api_version="2024-02-15-preview",  # API version specification
-            # Custom HTTP client for enhanced compatibility
-            http_client=httpx.Client(verify=False, http2=True),
+            api_version=AZURE_API_VERSION,
         )
         print("✅ Azure OpenAI client initialized successfully")
 
@@ -335,7 +373,7 @@ def main():
 
         # Submit user input to Palo Alto Networks for security analysis
         scan_result = scan_prompt_with_paloalto_api(
-            user_input, pan_api_key, pan_ai_profile_name)
+            user_input, pan_api_key, pan_ai_profile_name, ai_model=azure_deploy)
 
         # SECURITY DECISION PROCESSING
         if scan_result:
@@ -403,14 +441,39 @@ def main():
                         )
 
                         # Extract the generated response text
-                        ai_response = response.choices[0].message.content
+                        ai_response = response.choices[0].message.content or ""
 
-                        # Display the AI-generated response
-                        print("\n" + "=" * 60)
-                        print("🤖 AI RESPONSE:")
-                        print("=" * 60)
-                        print(ai_response)
-                        print("=" * 60)
+                        # RESPONSE SCANNING PHASE
+                        # The model output goes back to Palo Alto together with
+                        # the prompt, so leaked sensitive data, malicious URLs
+                        # or code, toxic content, and dangerous SQL in the reply
+                        # are caught before anything is displayed.
+                        print("\n🔒 RESPONSE SCANNING PHASE")
+                        print("=" * 50)
+                        response_scan = scan_prompt_with_paloalto_api(
+                            user_input, pan_api_key, pan_ai_profile_name,
+                            response=ai_response, ai_model=azure_deploy)
+
+                        if response_scan is None:
+                            # Fail closed: an unscanned reply is not shown.
+                            print("\n❌ RESPONSE SCAN FAILED")
+                            print("🤖 Response: The AI reply could not be security scanned,")
+                            print("   so it was not displayed. Please try again.")
+                        elif response_scan.get("category") == "malicious" or response_scan.get("action") == "block":
+                            print("\n🚫 AI RESPONSE BLOCKED BY SECURITY")
+                            print("=" * 40)
+                            print(f"Security Status: {str(response_scan.get('category')).upper()}")
+                            print(f"Action Taken: {str(response_scan.get('action')).upper()}")
+                            print("\n🤖 Response: The AI generated a reply that violates the")
+                            print("   security profile, so it was withheld.")
+                            print("=" * 40)
+                        else:
+                            # Display the AI-generated response
+                            print("\n" + "=" * 60)
+                            print("🤖 AI RESPONSE:")
+                            print("=" * 60)
+                            print(ai_response)
+                            print("=" * 60)
 
                     except Exception as azure_err:
                         # Handle Azure OpenAI processing errors

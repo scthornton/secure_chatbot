@@ -5,63 +5,23 @@
 # Everything here comes from public PyPI. No extra index URL is needed.
 # Requires Python 3.10+ (pan-aisecurity minimum).
 
-# Core Python packages
+# HTTP client used for the Prisma AIRS scan calls
 requests>=2.31.0
-urllib3>=2.0.0
 
-# HTTP client. Both chatbots do "import httpx" at module scope and build an
-# httpx.Client(http2=True), so httpx and its http2 extra are hard requirements,
-# not optional. They were previously missing here, which meant a clean install
-# failed with ModuleNotFoundError on the very first run.
-httpx[http2]>=0.25.0
-
-# Azure OpenAI integration
-# Capped below 3.0 on purpose: openai 3.x switched its http_client parameter
-# from httpx.Client to httpx2.Client, which breaks the AzureOpenAI(...) calls
-# in both chatbots. Lift this cap only together with a port to httpx2.
-openai>=1.35.0,<3
+# Azure OpenAI client. Verified against openai 1.x and 3.x; the chatbots only
+# use AzureOpenAI(azure_endpoint, api_key, api_version) and
+# chat.completions.create(). The old httpx[http2] requirement and the <3 cap
+# are gone with the custom http_client that needed them.
+openai>=1.35.0
 
 # Palo Alto Networks AI Runtime Security SDK
 # Published on public PyPI as "pan-aisecurity". The importable module is
-# "aisecurity", which is why this was previously mispinned as a bare
-# "aisecurity" package that does not exist on PyPI.
-# Requires Python 3.10+.
+# "aisecurity". Used by secure_chatbot_python.py.
 pan-aisecurity>=0.4.0
 
-# Environment management
+# Loads .env into the environment (real environment variables win)
 python-dotenv>=1.0.0
 
-# GUI Framework (included with Python, but listed for clarity)
-# tkinter - included with Python standard library
-
-# Optional: Development and testing dependencies
-# Uncomment if you need these for development
-# pytest>=7.4.0
-# black>=23.0.0
-# flake8>=6.0.0
-# mypy>=1.5.0
-
-# Optional: Enhanced error handling and logging
-# Uncomment if you want more advanced logging
-# loguru>=0.7.0
-# colorama>=0.4.6
-
-# Optional: Configuration management
-# Uncomment if you want YAML/TOML config support
-# pyyaml>=6.0.1
-# toml>=0.10.2
-
-# Optional: Enhanced JSON handling
-# Uncomment if you need more JSON features
-# ujson>=5.8.0
-
-# Optional: Async support (if you extend the async functionality)
-# Uncomment if you plan to add more async features
-# aiohttp>=3.8.0
-# asyncio-throttle>=1.0.0
-
-# Security: Pin versions for production use
-# For production, consider pinning exact versions like:
-# requests==2.31.0
-# openai==1.35.0
-# python-dotenv==1.0.0
+# Development and testing dependencies live in requirements_dev.txt.
+# For a reproducible install, pin exact versions after your first successful
+# run: pip freeze > requirements.lock
