@@ -11,9 +11,9 @@ import requests
 import json
 import os
 import uuid
-import httpx
 import asyncio
 import time
+import getpass
 from openai import AzureOpenAI
 
 # Load credentials from a .env file if one is present, so the documented
@@ -24,6 +24,22 @@ try:
     load_dotenv()
 except ImportError:
     pass  # python-dotenv is optional; export the variables yourself instead
+
+# Prisma AIRS regional endpoint. US is the default; set PANW_AI_SEC_ENDPOINT to
+# the EU (service-de), India (service-in), or Singapore (service-sg) host when
+# your API key was issued in that region. Keys are region-specific.
+PANW_AI_SEC_ENDPOINT = os.getenv(
+    "PANW_AI_SEC_ENDPOINT", "https://service.api.aisecurity.paloaltonetworks.com"
+).rstrip("/")
+
+# Azure OpenAI data-plane API version. 2024-10-21 is a GA version; override
+# with AZURE_API_VERSION if your deployment needs a different one.
+AZURE_API_VERSION = os.getenv("AZURE_API_VERSION", "2024-10-21")
+
+# Metadata attached to every scan. app_name and app_user show up in the Strata
+# Cloud Manager session and violation views.
+APP_NAME = os.getenv("PANW_AI_SEC_APP_NAME", "secure-chatbot-azure-sdk")
+APP_USER = os.getenv("PANW_AI_SEC_APP_USER", getpass.getuser())
 
 # Import the real Palo Alto Networks AI Security SDK
 try:
@@ -46,11 +62,12 @@ class SDKSecurityScanner:
     combined with direct HTTP requests for scanning functionality.
     """
 
-    def __init__(self, api_key, profile_name, api_endpoint=None, num_retries=3):
+    def __init__(self, api_key, profile_name, api_endpoint=None, num_retries=3, ai_model=None):
         self.api_key = api_key
         self.profile_name = profile_name
-        self.api_endpoint = api_endpoint or "https://service.api.aisecurity.paloaltonetworks.com"
+        self.api_endpoint = (api_endpoint or PANW_AI_SEC_ENDPOINT).rstrip("/")
         self.num_retries = num_retries
+        self.ai_model = ai_model or "azure-openai"
 
         # Initialize the SDK
         aisecurity.init(
@@ -73,17 +90,24 @@ class SDKSecurityScanner:
             'toxicity': 'Toxic Content',
         }
 
-    def create_scan_request(self, prompt):
-        """Create a scan request using SDK models"""
+    def create_scan_request(self, prompt, response=None):
+        """Create a scan request. Include the LLM reply in `response` on the
+        second scan of a turn so AIRS can inspect the model output too."""
         try:
-            # Use SDK models
             ai_profile_data = {"profile_name": self.profile_name}
             content_data = {"prompt": prompt}
+            if response is not None:
+                content_data["response"] = response
 
             # Create the request data structure
             request_data = {
                 "tr_id": str(uuid.uuid4()),
                 "ai_profile": ai_profile_data,
+                "metadata": {
+                    "app_name": APP_NAME,
+                    "app_user": APP_USER,
+                    "ai_model": self.ai_model
+                },
                 "contents": [content_data]
             }
 
@@ -122,15 +146,21 @@ class SDKSecurityScanner:
                 return result
 
             except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 401:
+                status = e.response.status_code
+                if status == 401:
+                    # Retrying will not help
                     raise AISecSDKException(
-                        f"Authentication failed: Invalid API key")
-                elif e.response.status_code == 404:
+                        "Authentication failed: invalid or expired API key")
+                elif status == 400:
+                    # AIRS returns 400 for an unknown or misspelled profile
+                    # name (case-sensitive) and for malformed payloads
                     raise AISecSDKException(
-                        f"Profile not found: {self.profile_name}")
+                        f"Scan rejected (HTTP 400): {e.response.text.strip()} "
+                        f"- check PANW_AI_SEC_PROFILE_NAME ('{self.profile_name}')")
                 elif attempt == self.num_retries:
+                    # 429 and 5xx fall through to the retry loop first
                     raise AISecSDKException(
-                        f"HTTP Error after {self.num_retries} retries: {e}")
+                        f"HTTP error {status} after {self.num_retries} retries: {e}")
 
             except requests.exceptions.ConnectionError as e:
                 if attempt == self.num_retries:
@@ -142,25 +172,27 @@ class SDKSecurityScanner:
                     raise AISecSDKException(
                         f"Request timeout after {self.num_retries} retries: {e}")
 
-    def sync_scan(self, prompt):
+    def sync_scan(self, prompt, response=None):
         """
         Perform synchronous security scan using Python SDK
 
         Args:
             prompt (str): The user's message to scan
+            response (str, optional): The LLM reply to scan with the prompt
 
         Returns:
             dict: Comprehensive scan results
         """
         start_time = time.time()
 
-        print(f"🔍 Python SDK Security Scan Starting...")
+        what = "prompt + response" if response is not None else "prompt"
+        print(f"🔍 Python SDK Security Scan Starting ({what})...")
         print(f"   Content: '{prompt[:50]}...' ({len(prompt)} characters)")
         print(f"   SDK Profile: {self.profile_name}")
         print(f"   SDK Endpoint: {self.config.api_endpoint}")
 
         # Create scan request using SDK models
-        request_data = self.create_scan_request(prompt)
+        request_data = self.create_scan_request(prompt, response)
         print(f"   Transaction ID: {request_data['tr_id']}")
 
         # Execute scan request
@@ -172,19 +204,20 @@ class SDKSecurityScanner:
 
         return scan_result
 
-    async def async_scan(self, prompt):
+    async def async_scan(self, prompt, response=None):
         """
         Perform asynchronous security scan
 
         Args:
             prompt (str): The user's message to scan
+            response (str, optional): The LLM reply to scan with the prompt
 
         Returns:
             dict: Comprehensive scan results
         """
         # Run sync scan in executor to avoid blocking
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self.sync_scan, prompt)
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.sync_scan, prompt, response)
 
     def display_enhanced_results(self, scan_result):
         """Display comprehensive SDK-style scan results"""
@@ -206,7 +239,9 @@ class SDKSecurityScanner:
 
         threats_found = False
 
-        # Debug information
+        # Debug information. response_detected is only populated when a
+        # response was included in the scan request; AIRS inspects what the
+        # model actually said rather than predicting it.
         print(f"🔍 SDK SCAN DETAILS:")
         print(f"   Category: {scan_result.get('category')}")
         print(f"   Action: {scan_result.get('action')}")
@@ -324,7 +359,8 @@ async def main():
         scanner = SDKSecurityScanner(
             api_key=pan_api_key,
             profile_name=pan_ai_profile_name,
-            num_retries=3
+            num_retries=3,
+            ai_model=azure_deploy
         )
         print("✅ Python SDK Scanner initialized successfully")
         print(f"   API Endpoint: {scanner.config.api_endpoint}")
@@ -341,11 +377,13 @@ async def main():
     azure_endpoint = f"https://{azure_project}.openai.azure.com/"
 
     try:
+        # TLS verification stays ON. An earlier version disabled it, which
+        # exposed the Azure key to any on-path interceptor. Behind a
+        # TLS-inspecting proxy, point SSL_CERT_FILE at your corporate CA bundle.
         azure_client = AzureOpenAI(
             azure_endpoint=azure_endpoint,
             api_key=azure_key,
-            api_version="2024-02-15-preview",
-            http_client=httpx.Client(verify=False, http2=True),
+            api_version=AZURE_API_VERSION,
         )
         print("✅ Azure OpenAI client initialized successfully")
     except Exception as e:
@@ -443,13 +481,30 @@ async def main():
                             stop=None
                         )
 
-                        ai_response = response.choices[0].message.content
+                        ai_response = response.choices[0].message.content or ""
 
-                        print("\n" + "=" * 60)
-                        print("🤖 AI RESPONSE:")
-                        print("=" * 60)
-                        print(ai_response)
-                        print("=" * 60)
+                        # RESPONSE SCANNING: send the reply back with the
+                        # prompt so leaked data, malicious URLs or code, toxic
+                        # content, and dangerous SQL are caught before display.
+                        print("\n🔒 PYTHON SDK RESPONSE SCANNING")
+                        print("=" * 50)
+                        response_scan = await scanner.async_scan(user_input, ai_response)
+                        scanner.display_enhanced_results(response_scan)
+
+                        if response_scan.get("category") == "malicious" or response_scan.get("action") == "block":
+                            print("\n🚫 AI RESPONSE BLOCKED BY SDK SECURITY")
+                            print("=" * 50)
+                            print(f"Security Status: {str(response_scan.get('category')).upper()}")
+                            print(f"Action Taken: {str(response_scan.get('action')).upper()}")
+                            print("\n🤖 SDK Response: The AI generated a reply that violates the")
+                            print("   security profile, so it was withheld.")
+                            print("=" * 50)
+                        else:
+                            print("\n" + "=" * 60)
+                            print("🤖 AI RESPONSE:")
+                            print("=" * 60)
+                            print(ai_response)
+                            print("=" * 60)
 
                     except Exception as azure_err:
                         print(f"\n❌ AZURE OPENAI ERROR: {azure_err}")

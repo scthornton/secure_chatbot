@@ -171,10 +171,7 @@ try:
         print("✅ aisecurity imported successfully")
     except ImportError:
         print("⚠️  aisecurity not available - install it with: pip install pan-aisecurity")
-    
-    import tkinter
-    print("✅ tkinter imported successfully")
-    
+
     from dotenv import load_dotenv
     print("✅ python-dotenv imported successfully")
     

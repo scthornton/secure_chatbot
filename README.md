@@ -7,26 +7,23 @@
 
 > **Secure AI chatbot implementations demonstrating real-time threat protection using Palo Alto Networks AI Runtime Security**
 
-Two complete chatbot implementations showcasing how to integrate AI Runtime Security protection into your applications - one using the Python SDK and another using direct API calls.
+Two complete terminal chatbot implementations (Azure OpenAI as the model) showcasing how to integrate AI Runtime Security protection into your applications - one using the Python SDK and another using direct API calls.
+
+Looking for the same app routed through the **Prisma AIRS AI Gateway** instead of calling the scan API directly? See [secure-chatbot-panw-gateway](https://github.com/scthornton/secure-chatbot-panw-gateway). OpenAI and Anthropic variants of this app: [secure-chatbot-panw-openai](https://github.com/scthornton/secure-chatbot-panw-openai), [secure-chatbot-panw-claude](https://github.com/scthornton/secure-chatbot-panw-claude).
 
 ## 🌟 Features
 
 ### 🔒 **Security-First Design**
-- **Real-time threat scanning** for both user prompts and AI responses
+- **Real-time threat scanning** of every user prompt before it reaches the model, and of every model response before it is displayed
 - **Prompt injection detection** to prevent malicious attempts
 - **Malicious code detection** in AI-generated content
 - **URL security scanning** for harmful links
 - **Toxic content filtering** and sensitive data protection
+- **Scan metadata** (`app_name`, `app_user`, `ai_model`) so the sessions are easy to find in Strata Cloud Manager
 
 ### 🚀 **Two Implementation Approaches**
-1. **Python SDK Version** - Simplified integration with built-in error handling
+1. **Python SDK Version** - Uses `pan-aisecurity` for configuration, adds retries with backoff and scan timing
 2. **Direct API Version** - Full control with transparent API interactions
-
-### 💻 **Modern UI/UX**
-- Clean, intuitive Tkinter-based interface
-- Real-time security status indicators
-- Color-coded message types for easy monitoring
-- Threaded processing to maintain responsiveness
 
 ## 📁 Project Structure
 
@@ -79,11 +76,15 @@ Add your credentials to `.env`:
 ```env
 PANW_AI_SEC_API_KEY=your_api_key_here
 PANW_AI_SEC_PROFILE_NAME=your_profile_name
+# Optional: regional endpoint (US is the default). Keys are region-specific.
+# PANW_AI_SEC_ENDPOINT=https://service-de.api.aisecurity.paloaltonetworks.com
 
 # Azure OpenAI. AZURE_PROJECT is the resource NAME, not the full URL.
 AZURE_PROJECT=your_azure_openai_resource_name
 AZURE_KEY=your_azure_openai_api_key
 AZURE_DEPLOY=your_deployment_name
+# Optional: Azure OpenAI API version (default 2024-10-21)
+# AZURE_API_VERSION=2024-10-21
 ```
 
 ### 3. Run the Applications
@@ -106,10 +107,14 @@ python secure_chatbot_api.py
 
 ### API Endpoints
 
+Set `PANW_AI_SEC_ENDPOINT` to the region your API key was issued in (keys do not work cross-region):
+
 | Region | Endpoint |
 |--------|----------|
-| **US** | `https://service.api.aisecurity.paloaltonetworks.com` |
+| **US** (default) | `https://service.api.aisecurity.paloaltonetworks.com` |
 | **EU (Germany)** | `https://service-de.api.aisecurity.paloaltonetworks.com` |
+| **India** | `https://service-in.api.aisecurity.paloaltonetworks.com` |
+| **Singapore** | `https://service-sg.api.aisecurity.paloaltonetworks.com` |
 
 ### Security Profiles
 
@@ -125,24 +130,35 @@ Configure your security profile in [Strata Cloud Manager](https://apps.paloalton
 
 ### SDK Version Example
 
+Verified against `pan-aisecurity` 0.11.0:
+
 ```python
 import aisecurity
 from aisecurity.scan.inline.scanner import Scanner
+from aisecurity.scan.models.content import Content
 from aisecurity.generated_openapi_client.models.ai_profile import AiProfile
+from aisecurity.generated_openapi_client.models.metadata import Metadata
 
-# Initialize the SDK
+# Initialize the SDK (api_endpoint is optional; US is the default)
 aisecurity.init(api_key="your_api_key")
 
-# Create scanner and profile
 scanner = Scanner()
 ai_profile = AiProfile(profile_name="Secure-AI")
 
-# Scan content
+# Scan a prompt
 result = scanner.sync_scan(
     ai_profile=ai_profile,
-    content={"prompt": "Your message here"},
-    metadata={"app_user": "user123"}
+    content=Content(prompt="Your message here"),
+    metadata=Metadata(app_name="my-app", app_user="user123"),
 )
+print(result.action, result.category, result.prompt_detected)
+
+# Scan the model's reply together with the prompt
+result = scanner.sync_scan(
+    ai_profile=ai_profile,
+    content=Content(prompt="Your message here", response="The model's reply"),
+)
+print(result.action, result.response_detected)
 ```
 
 ### Direct API Example
@@ -158,15 +174,18 @@ headers = {
 payload = {
     "tr_id": "unique_transaction_id",
     "ai_profile": {"profile_name": "Secure-AI"},
-    "metadata": {"app_user": "user123"},
-    "contents": [{"prompt": "Your message here"}]
+    "metadata": {"app_name": "my-app", "app_user": "user123"},
+    "contents": [{"prompt": "Your message here", "response": "The model's reply"}]
 }
 
 response = requests.post(
     'https://service.api.aisecurity.paloaltonetworks.com/v1/scan/sync/request',
     json=payload,
-    headers=headers
+    headers=headers,
+    timeout=30,
 )
+verdict = response.json()
+print(verdict["action"], verdict["prompt_detected"], verdict["response_detected"])
 ```
 
 ## 🛡️ Security Features Explained
@@ -227,36 +246,26 @@ Both implementations provide detailed logging:
 
 ### Custom Security Profiles
 
-Create specialized profiles for different use cases:
-
-```python
-# High-security profile for sensitive applications
-high_security_profile = AiProfile(
-    profile_name="HighSecurity-Banking",
-    # Additional security settings configured in SCM
-)
-
-# Balanced profile for general use
-balanced_profile = AiProfile(
-    profile_name="Balanced-General",
-    # Standard security settings
-)
-```
+Create specialized profiles for different use cases in Strata Cloud Manager, then
+point the app at them with `PANW_AI_SEC_PROFILE_NAME` (for example a strict
+`HighSecurity-Banking` profile for production and a permissive one for testing).
+Profile names are case-sensitive.
 
 ### Metadata Enrichment
 
-Enhance scans with contextual information:
+The scan API accepts three metadata fields, and the app sends all of them
+(`PANW_AI_SEC_APP_NAME` and `PANW_AI_SEC_APP_USER` override the defaults):
 
 ```python
 metadata = {
-    "app_user": "john.doe@company.com",
-    "ai_model": "GPT-4",
     "app_name": "Customer Support Bot",
-    "session_id": "sess_12345",
-    "user_role": "customer",
-    "department": "support"
+    "app_user": "john.doe@company.com",
+    "ai_model": "gpt-4o",
 }
 ```
+
+Use `tr_id` on the request to group the scans of one conversation into a
+session in the Strata Cloud Manager views.
 
 ## 🤝 Contributing
 
@@ -361,7 +370,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Contact
 
-**Scott Thornton** — AI Security Researcher
+**Scott Thornton** - AI Security Researcher
 
 - Website: [perfecxion.ai](https://perfecxion.ai/)
 - Email: [scott@perfecxion.ai](mailto:scott@perfecxion.ai)
